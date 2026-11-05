@@ -5,6 +5,7 @@
 проверку их срока действия и автоматическое обновление.
 """
 
+import asyncio
 import logging
 import time
 
@@ -25,6 +26,7 @@ class TokenManager:
         self.hass = hass
         self.entry = entry
         self._tok = entry.data["token_data"]
+        self._refresh_lock = asyncio.Lock()
 
     # --- Публичный интерфейс ---
 
@@ -39,8 +41,9 @@ class TokenManager:
             return True
 
         _LOGGER.debug("Токен истёк, попытка обновления...")
-        if await self._refresh():
-            return True
+        async with self._refresh_lock:
+            if not self._is_expired() or await self._refresh():
+                return True
 
         _LOGGER.error("Не удалось обновить токен, требуется повторная авторизация")
         return False
@@ -57,12 +60,12 @@ class TokenManager:
     async def _refresh(self) -> bool:
         """Обновляет токен через refresh_token и сохраняет в config entry."""
         try:
-            new_tok = await self.hass.async_add_executor_job(
-                self._do_refresh_request
-            )
+            new_tok = await self.hass.async_add_executor_job(self._do_refresh_request)
             if new_tok is None:
                 return False
 
+            if not new_tok.get("refresh_token"):
+                new_tok["refresh_token"] = self._tok["refresh_token"]
             new_tok["timestamp"] = int(time.time())
             self._tok = new_tok
 

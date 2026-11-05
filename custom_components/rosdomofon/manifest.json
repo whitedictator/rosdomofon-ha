@@ -2,18 +2,19 @@
   "domain": "rosdomofon",
   "name": "Росдомофон",
   "codeowners": [
-    "@iljyxa"
+    "@whitedictator"
   ],
   "config_flow": true,
   "dependencies": [
     "http",
     "ffmpeg"
   ],
-  "documentation": "https://github.com/iljyxa/rosdomofon-ha",
-  "iot_class": "cloud_polling",
-  "issue_tracker": "https://github.com/iljyxa/rosdomofon-ha/issues",
+  "documentation": "https://github.com/whitedictator/rosdomofon-ha",
+  "iot_class": "cloud_push",
+  "issue_tracker": "https://github.com/whitedictator/rosdomofon-ha/issues",
   "requirements": [
-    "requests"
+    "requests",
+    "firebase-messaging==0.4.5"
   ],
-  "version": "1.4.1"
+  "version": "1.5.0b1"
 }

@@ -1,0 +1,55 @@
+<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Росдомофон — подтверждение входа</title><style>
+:root{color-scheme:light dark;--bg:#f3f5f8;--panel:#fff;--ink:#172238;--muted:#607087;--line:#e4e9f0;--blue:#1769d3;--pale:#eef5ff;--good:#16865a;--amber:#ad6408}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.6 system-ui,-apple-system,sans-serif;min-height:100vh;display:grid;place-items:center;padding:28px}main{max-width:590px;width:100%;background:var(--panel);border:1px solid var(--line);border-radius:24px;padding:32px 38px;box-shadow:0 18px 60px #1722380a}.brand{display:flex;align-items:center;gap:12px;color:var(--muted);font-weight:650;font-size:14px}.brand svg{color:var(--blue)}h1{font-size:28px;line-height:1.25;margin:28px 0 10px;letter-spacing:-.5px}p{margin:8px 0;color:var(--muted)}.number{display:block;color:var(--blue);text-decoration:none;font-size:clamp(23px,5vw,34px);font-weight:750;letter-spacing:-.7px;margin:22px 0 24px;white-space:nowrap}.timer-box{background:var(--pale);border-radius:16px;padding:18px 22px;display:flex;align-items:center;gap:25px}.time{font-size:43px;line-height:1.2;letter-spacing:-1.5px;font-weight:720;font-variant-numeric:tabular-nums}.timer-caption{font-size:14px;line-height:1.4;color:var(--muted)}.track{height:4px;background:var(--line);border-radius:4px;margin-top:16px;overflow:hidden}.bar{height:100%;background:var(--blue);width:100%;transition:width .2s linear}ol{padding-left:24px;margin:26px 0 18px;color:var(--muted)}li{padding:3px 0}li::marker{color:var(--blue);font-weight:700}.foot{border-top:1px solid var(--line);padding-top:18px;font-size:13px;color:var(--muted)}.result{padding:27px 0 10px}.badge{display:grid;place-items:center;background:#e6f6ef;color:var(--good);border-radius:50%;width:76px;height:76px;margin:30px 0 20px}.action{border:0;cursor:pointer;font:inherit;display:inline-block;background:var(--blue);color:#fff;text-decoration:none;padding:12px 18px;border-radius:10px;font-weight:650;margin:20px 0}.warning .badge{background:#fff1df;color:var(--amber)}.secondary{background:transparent;color:var(--blue);padding-left:0;margin-left:0;display:block;font-size:14px}button:disabled{opacity:.55;cursor:wait}[hidden]{display:none!important}@media(prefers-color-scheme:dark){:root{--bg:#111720;--panel:#192231;--ink:#e9edf5;--muted:#a8b5c7;--line:#303d51;--blue:#79b4ff;--pale:#22314a}.action{color:#132237}.badge{background:#173b2d}.warning .badge{background:#413221}}@media(max-width:480px){body{padding:14px}main{padding:25px 22px;border-radius:18px}h1{font-size:25px}.timer-box{gap:19px}}
+</style></head><body><main><div class="brand"><svg width="31" height="34" viewBox="0 0 31 34" fill="none" aria-hidden="true"><rect x="6" y="2" width="20" height="30" rx="4" stroke="currentColor" stroke-width="2.2"/><circle cx="16" cy="9" r="2.5" stroke="currentColor" stroke-width="2"/><path d="M11 16h10M11 20h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="16" cy="27" r="1.7" fill="currentColor"/></svg>Росдомофон <span aria-hidden="true">/</span> Home Assistant</div>
+<section id="pending"><h1>Позвоните для входа</h1><p>С номера телефона, зарегистрированного в Росдомофоне, позвоните на:</p><a class="number" id="phone" href="tel:__TEL__">__NUMBER__</a><div class="timer-box"><div class="time" id="timer" role="timer" aria-label="Осталось времени">__TIME__</div><div class="timer-caption">осталось<br>для подтверждения</div></div><div class="track"><div class="bar" id="bar"></div></div><ol><li>Позвоните на указанный номер с номера телефона, зарегистрированного в Росдомофоне.</li><li>Дождитесь, пока сервис сбросит звонок.</li><li>Подтверждение проверяется автоматически.</li></ol><div class="foot" id="network">Не закрывайте настройку интеграции в Home Assistant.</div></section>
+<section id="result" class="result" hidden><div class="badge"><svg id="result-icon" width="38" height="38" viewBox="0 0 40 40" fill="none" aria-hidden="true"><path d="M8 21l8 8 16-18" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/></svg></div><h1 id="result-title"></h1><p id="result-copy"></p><button class="action" type="button" id="retry" hidden>Получить новый номер</button><a class="action secondary" href="__RETURN_URL__">Вернуться в Home Assistant</a></section></main>
+<script nonce="__NONCE__">
+(()=>{
+ const initial=__STATE__,csrf='__CSRF__';let status=initial,base=performance.now(),remaining=initial.remaining_ms,busy=false,retrying=false;
+ const el=id=>document.getElementById(id);
+ const errors={rate_limited:'Слишком много запросов. Подождите перед повтором.',callback_unavailable:'Подтверждение звонком для этого номера недоступно.',cannot_connect:'Не удалось связаться с сервисом. Можно повторить запрос.'};
+ const done=s=>s==='confirmed'||s==='cancelled';
+ function show(s){
+  status=s;remaining=s.remaining_ms;base=performance.now();const pending=s.state==='pending';
+  el('pending').hidden=!pending;el('result').hidden=pending;
+  if(pending){el('phone').textContent=s.number;el('phone').href='tel:'+s.tel;return;}
+  const good=s.state==='confirmed';el('result').classList.toggle('warning',!good);
+  el('result-title').textContent=good?'Номер подтверждён':s.state==='expired'?'Время истекло':s.state==='cancelled'?'Вход отменён':'Не удалось подтвердить вход';
+  el('result-copy').textContent=good?'Вернитесь в Home Assistant — настройка продолжится автоматически.':s.state==='expired'?'Запросите новый номер и позвоните в течение нового отсчёта. Прежний номер больше не используйте.':errors[s.error]||'Вернитесь в Home Assistant и повторите вход.';
+  el('retry').hidden=!s.can_retry;
+  el('result-icon').innerHTML=good?'<path d="M8 21l8 8 16-18" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>':'<path d="M20 10v13m0 7v.2" stroke="currentColor" stroke-width="3.5" stroke-linecap="round"/>';
+ }
+ function format(ms){let sec=Math.ceil(Math.max(0,ms)/1000);return String(Math.floor(sec/60)).padStart(2,'0')+':'+String(sec%60).padStart(2,'0');}
+ function tick(){
+  const elapsed=performance.now()-base;
+  if(status.state==='pending'){
+   const ms=Math.max(0,remaining-elapsed);el('timer').textContent=format(ms);el('bar').style.width=Math.min(100,ms/(status.duration*1000)*100)+'%';
+  }else{
+   const wait=Math.max(0,(status.retry_remaining_ms||0)-elapsed);el('retry').disabled=retrying||wait>0;
+   el('retry').textContent=retrying?'Запрашиваем новый номер…':wait>0?'Повторить через '+format(wait):'Получить новый номер';
+  }
+ }
+ async function poll(){
+  if(busy||retrying||done(status.state))return;busy=true;
+  try{
+   const response=await fetch(location.pathname+'/status',{cache:'no-store',redirect:'error',credentials:'omit'});
+   if(response.ok){show(await response.json());el('network').textContent='Не закрывайте настройку интеграции в Home Assistant.';}
+   else if(response.status===404||response.status===410){show({...status,state:'cancelled',can_retry:false});}
+   else el('network').textContent='Ожидаем связь с Home Assistant…';
+  }catch(e){el('network').textContent='Ожидаем связь с Home Assistant…';}
+  finally{busy=false;tick();}
+ }
+ el('retry').addEventListener('click',async()=>{
+  if(retrying||el('retry').disabled)return;retrying=true;tick();
+  try{
+   const response=await fetch(location.pathname+'/retry',{method:'POST',headers:{'X-Rosdomofon-Callback':csrf},cache:'no-store',redirect:'error',credentials:'omit'});
+   if(response.ok)show(await response.json());
+   else if(response.status===410)show({...status,state:'cancelled',can_retry:false});
+   else el('result-copy').textContent='Запрос пока недоступен. Подождите немного и повторите.';
+  }catch(e){el('result-copy').textContent='Нет связи с Home Assistant. Проверьте соединение и повторите.';}
+  finally{retrying=false;tick();}
+ });
+ show(initial);tick();setInterval(tick,200);setInterval(poll,1500);
+})();
+
+</script></body></html>

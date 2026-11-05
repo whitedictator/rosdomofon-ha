@@ -20,16 +20,18 @@ from .token_manager import TokenManager
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[str] = ["lock", "button", "camera"]
+PLATFORMS: list[str] = ["lock", "button", "camera", "binary_sensor"]
 
 # Схема сервиса генерации гостевой ссылки
 SERVICE_GENERATE_LINK = "generate_share_link"
-SERVICE_GENERATE_LINK_SCHEMA = vol.Schema({
-    vol.Required("entity_id"): cv.entity_id,
-    vol.Optional("ttl_hours", default=SHARE_LINK_DEFAULT_TTL_HOURS): vol.All(
-        vol.Coerce(float), vol.Range(min=0.5, max=168)
-    ),
-})
+SERVICE_GENERATE_LINK_SCHEMA = vol.Schema(
+    {
+        vol.Required("entity_id"): cv.entity_id,
+        vol.Optional("ttl_hours", default=SHARE_LINK_DEFAULT_TTL_HOURS): vol.All(
+            vol.Coerce(float), vol.Range(min=0.5, max=168)
+        ),
+    }
+)
 
 
 async def async_setup_entry(hass, entry) -> bool:
@@ -55,6 +57,7 @@ async def async_setup_entry(hass, entry) -> bool:
 
     # Регистрируем сервис генерации ссылки (один раз на домен)
     if not hass.services.has_service(DOMAIN, SERVICE_GENERATE_LINK):
+
         async def handle_generate_link(call):
             """Обработчик сервиса rosdomofon.generate_share_link."""
             entity_id = call.data["entity_id"]
@@ -102,13 +105,28 @@ async def async_setup_entry(hass, entry) -> bool:
             schema=SERVICE_GENERATE_LINK_SCHEMA,
         )
 
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    platforms = ["lock", "button", "camera"]
+    if entry.options.get("incoming_calls", True):
+        from .push import CallReceiver
+
+        receiver = CallReceiver(hass, entry, token_manager)
+        hass.data[DOMAIN][entry.entry_id]["call_receiver"] = receiver
+        platforms.append("binary_sensor")
+    hass.data[DOMAIN][entry.entry_id]["platforms"] = platforms
+    await hass.config_entries.async_forward_entry_setups(entry, platforms)
+    if receiver := hass.data[DOMAIN][entry.entry_id].get("call_receiver"):
+        receiver.task = hass.async_create_background_task(receiver.run(), "rosdomofon direct push")
+    entry.async_on_unload(entry.add_update_listener(_async_options_updated))
     return True
 
 
 async def async_unload_entry(hass, entry) -> bool:
     """Выгрузка интеграции при удалении config entry."""
-    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    receiver = hass.data.get(DOMAIN, {}).get(entry.entry_id, {}).get("call_receiver")
+    if receiver:
+        await receiver.stop()
+    platforms = hass.data.get(DOMAIN, {}).get(entry.entry_id, {}).get("platforms", PLATFORMS)
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, platforms)
 
     if unload_ok:
         data = hass.data[DOMAIN].pop(entry.entry_id, {})
@@ -121,3 +139,7 @@ async def async_unload_entry(hass, entry) -> bool:
             hass.services.async_remove(DOMAIN, SERVICE_GENERATE_LINK)
 
     return unload_ok
+
+
+async def _async_options_updated(hass, entry):
+    await hass.config_entries.async_reload(entry.entry_id)

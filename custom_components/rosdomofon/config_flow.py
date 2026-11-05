@@ -1,23 +1,15 @@
-"""
-Поток настройки (Config Flow) интеграции Росдомофон.
-
-Поддерживаются два способа входа:
-1. По номеру телефона: пользователь вводит номер РФ, сервис отправляет SMS,
-   затем пользователь вводит код из SMS и интеграция получает OAuth-токен.
-2. По refresh_token: пользователь вводит готовый refresh_token (полученный,
-   например, из мобильного приложения), интеграция обменивает его на
-   access_token через oauth/token. Полезно, когда провайдер домофона
-   отключил подтверждение по SMS (звонок, MAX и т.д.), которое config flow
-   пока не умеет проходить напрямую.
-"""
+"""Настройка Росдомофона: подтверждающий звонок, SMS или refresh_token."""
 
 import logging
+from .callback_auth import CallbackApi, CallbackAuthError
+from .callback_web import async_get_pages
 import re
 import time
 
 import aiohttp
 import voluptuous as vol
 from homeassistant import config_entries
+from homeassistant.core import callback
 from homeassistant.helpers import aiohttp_client
 
 from .const import (
@@ -67,6 +59,15 @@ class RosdomofonConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     def __init__(self):
         self._phone: str | None = None
         self._tok: dict | None = None
+        self._callback_id = None
+        self._callback = None
+        self._pages = None
+        self._incoming_calls = True
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry):
+        return RosdomofonOptionsFlow()
 
     # --- Шаг 0: Выбор способа входа ---
 
@@ -74,8 +75,79 @@ class RosdomofonConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         """Предлагает выбрать способ входа: по SMS или по готовому refresh_token."""
         return self.async_show_menu(
             step_id="user",
-            menu_options=["phone", "token"],
+            menu_options=["callback", "phone", "token"],
         )
+
+    async def async_step_callback(self, user_input=None):
+        """Ask for a phone, then display an HA-hosted live countdown page."""
+        errors = {}
+        if user_input is not None:
+            phone = _normalize_phone(user_input["phone"])
+            error = _validate_phone(phone)
+            if error:
+                errors["phone"] = error
+            else:
+                try:
+                    self._phone = phone
+                    self._incoming_calls = user_input.get("incoming_calls", True)
+                    api = CallbackApi(aiohttp_client.async_get_clientsession(self.hass))
+                    self._callback = await api.begin(phone)
+                    self._pages = await async_get_pages(self.hass)
+                    self._callback_id = self._pages.add(self._callback, api, self.flow_id)
+                    return await self.async_step_callback_wait()
+                except CallbackAuthError as error:
+                    errors["base"] = str(error)
+                except Exception:
+                    errors["base"] = "cannot_connect"
+        return self.async_show_form(
+            step_id="callback",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("phone", default=self._phone or ""): str,
+                    vol.Optional("incoming_calls", default=True): bool,
+                }
+            ),
+            errors=errors,
+        )
+
+    async def async_step_callback_wait(self, user_input=None):
+        if self._callback is None:
+            return await self.async_step_callback()
+        if self._callback.state == "confirmed":
+            return self.async_external_step_done(next_step_id="callback_finish")
+        path = f"/api/rosdomofon/callback/{self._callback_id}"
+        # Relative URL uses the browser's current HA origin (reverse proxies too).
+        return self.async_external_step(
+            step_id="callback_wait",
+            url=path,
+            description_placeholders={
+                "number": self._callback.number,
+                "seconds": str(self._callback.duration),
+            },
+        )
+
+    async def async_step_callback_finish(self, user_input=None):
+        if self._callback and self._callback.state == "confirmed" and self._callback.token_data:
+            self._tok = dict(self._callback.token_data)
+            return self._create_entry()
+        reason = (
+            self._callback.error if self._callback and self._callback.error else "callback_expired"
+        )
+        return self.async_show_form(
+            step_id="callback_retry", data_schema=vol.Schema({}), errors={"base": reason}
+        )
+
+    async def async_step_callback_retry(self, user_input=None):
+        if self._pages and self._callback_id:
+            self._pages.release(self._callback_id)
+        self._callback = None
+        self._callback_id = None
+        return await self.async_step_callback()
+
+    def async_remove(self):
+        if self._pages and self._callback_id:
+            self._pages.release(self._callback_id)
+        super().async_remove()
 
     # --- Шаг 1а: Ввод номера телефона ---
 
@@ -97,9 +169,11 @@ class RosdomofonConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="phone",
-            data_schema=vol.Schema({
-                vol.Required("phone"): str,
-            }),
+            data_schema=vol.Schema(
+                {
+                    vol.Required("phone"): str,
+                }
+            ),
             description_placeholders={
                 "note": "+7 (XXX) XXX-XX-XX, можно вводить в свободном формате — пробелы и символы будут удалены автоматически",
             },
@@ -126,9 +200,11 @@ class RosdomofonConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="token",
-            data_schema=vol.Schema({
-                vol.Required("refresh_token"): str,
-            }),
+            data_schema=vol.Schema(
+                {
+                    vol.Required("refresh_token"): str,
+                }
+            ),
             errors=errors,
         )
 
@@ -139,9 +215,7 @@ class RosdomofonConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         errors: dict[str, str] = {}
 
         if user_input is not None:
-            self._tok = await self._get_token(
-                self._phone, user_input["sms_code"]
-            )
+            self._tok = await self._get_token(self._phone, user_input["sms_code"])
             if self._tok:
                 self._tok["timestamp"] = int(time.time())
                 return self._create_entry()
@@ -149,9 +223,11 @@ class RosdomofonConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="sms",
-            data_schema=vol.Schema({
-                vol.Required("sms_code"): str,
-            }),
+            data_schema=vol.Schema(
+                {
+                    vol.Required("sms_code"): str,
+                }
+            ),
             description_placeholders={"phone": self._phone},
             errors=errors,
         )
@@ -167,9 +243,12 @@ class RosdomofonConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             # хвост access_token, чтобы несколько таких записей можно было
             # различить в списке интеграций.
             token_suffix = (self._tok or {}).get("access_token", "")[-4:]
-            title = f"Росдомофон (токен …{token_suffix})" if token_suffix else "Росдомофон (по токену)"
+            title = (
+                f"Росдомофон (токен …{token_suffix})" if token_suffix else "Росдомофон (по токену)"
+            )
         return self.async_create_entry(
             title=title,
+            options={"incoming_calls": self._incoming_calls},
             data={
                 "phone": self._phone,
                 "token_data": self._tok,
@@ -212,7 +291,7 @@ class RosdomofonConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     "Ошибка получения токена (%s): %d %s",
                     log_context,
                     resp.status,
-                    await resp.text(),
+                    "[response body omitted]",
                 )
         except (aiohttp.ClientError, TimeoutError, ValueError) as exc:
             # ValueError покрывает и ошибку разбора JSON в ответе (json.JSONDecodeError).
@@ -244,3 +323,22 @@ class RosdomofonConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             # чтобы TokenManager мог обновлять токен и дальше.
             tok["refresh_token"] = refresh_token
         return tok
+
+
+class RosdomofonOptionsFlow(config_entries.OptionsFlow):
+    async def async_step_init(self, user_input=None):
+        if user_input is not None:
+            return self.async_create_entry(
+                title="", data={"incoming_calls": user_input["incoming_calls"]}
+            )
+        return self.async_show_form(
+            step_id="init",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(
+                        "incoming_calls",
+                        default=self.config_entry.options.get("incoming_calls", True),
+                    ): bool,
+                }
+            ),
+        )

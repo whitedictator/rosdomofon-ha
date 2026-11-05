@@ -14,6 +14,7 @@ from typing import Any
 import requests
 from homeassistant.components.lock import LockEntity
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.event import async_call_later
@@ -60,9 +61,7 @@ async def async_setup_entry(
         return
 
     try:
-        keys = await hass.async_add_executor_job(
-            _fetch_keys, token_manager.access_token
-        )
+        keys = await hass.async_add_executor_job(_fetch_keys, token_manager.access_token)
     except requests.RequestException as exc:
         _LOGGER.error("Ошибка получения ключей (сетевая ошибка): %s", exc)
         return
@@ -113,8 +112,7 @@ class RosdomofonLock(LockEntity):
     async def async_unlock(self, **kwargs: Any) -> None:
         """Открыть замок. Автоматически закроется через _AUTO_LOCK_DELAY сек."""
         if not await self._token_manager.ensure_valid_token():
-            _LOGGER.error("Не удалось обновить токен")
-            return
+            raise HomeAssistantError("Не удалось обновить сессию Росдомофона")
 
         try:
             success = await self.hass.async_add_executor_job(
@@ -123,13 +121,11 @@ class RosdomofonLock(LockEntity):
                 self._adapter_id,
                 self._relay,
             )
-        except Exception as exc:
-            _LOGGER.error("Ошибка при открытии %s: %s", self.name, exc)
-            return
+        except Exception:
+            raise HomeAssistantError("Сервис Росдомофона не подтвердил открытие") from None
 
         if not success:
-            _LOGGER.error("Не удалось открыть %s", self.name)
-            return
+            raise HomeAssistantError("Росдомофон отклонил команду открытия")
 
         self._attr_is_locked = False
         self.async_write_ha_state()
@@ -139,9 +135,7 @@ class RosdomofonLock(LockEntity):
             self._unlock_timer()
             self._unlock_timer = None
 
-        self._unlock_timer = async_call_later(
-            self.hass, _AUTO_LOCK_DELAY, self._async_auto_lock
-        )
+        self._unlock_timer = async_call_later(self.hass, _AUTO_LOCK_DELAY, self._async_auto_lock)
 
     @callback
     def _async_auto_lock(self, _now) -> None:
@@ -190,7 +184,5 @@ def _activate_key(access_token: str, adapter_id: str, relay: int) -> bool:
         _LOGGER.debug("Успешная активация %s/%d", adapter_id, relay)
         return True
 
-    _LOGGER.error(
-        "Ошибка активации: %d %s", response.status_code, response.text
-    )
+    _LOGGER.error("Ошибка активации: HTTP %d", response.status_code)
     return False
