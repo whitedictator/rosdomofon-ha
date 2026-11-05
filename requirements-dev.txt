@@ -1,0 +1,6 @@
+homeassistant==2026.10.4
+pytest-homeassistant-custom-component==0.13.375
+ha-ffmpeg==3.2.2
+PyTurboJPEG==2.6.1
+firebase-messaging==0.4.5
+ruff==0.17.3
