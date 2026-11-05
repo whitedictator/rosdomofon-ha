@@ -134,7 +134,7 @@ class CallReceiver:
                     FCM_CONFIG,
                     credentials,
                     self.credentials_updated,
-                    config=FcmPushClientConfig(abort_on_sequential_error_count=None),
+                    config=FcmPushClientConfig(abort_on_sequential_error_count=3),
                     http_client_session=async_get_clientsession(self.hass),
                 )
                 # FCM registration may need more than the library's 3s default.
@@ -153,7 +153,7 @@ class CallReceiver:
                     if was_available != self.available:
                         self.publish(self.state, self.reason)
                     await asyncio.sleep(10)
-                    if not self.available and str(self.client.run_state).endswith("STOPPED"):
+                    if not self.client.do_listen or any(task.done() for task in self.client.tasks):
                         raise RuntimeError("Push connection stopped")
             except asyncio.CancelledError:
                 raise
