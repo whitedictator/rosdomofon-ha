@@ -39,7 +39,7 @@ async def test_user_step_shows_menu(hass: HomeAssistant):
 
     assert result["type"] == data_entry_flow.FlowResultType.MENU
     assert result["step_id"] == "user"
-    assert set(result["menu_options"]) == {"phone", "token"}
+    assert set(result["menu_options"]) == {"callback", "phone", "token"}
 
 
 # --- Способ 1: номер телефона + SMS ---

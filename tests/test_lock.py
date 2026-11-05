@@ -3,6 +3,7 @@
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.rosdomofon.const import DOMAIN
 
@@ -137,7 +138,8 @@ async def test_lock_unlock_failure(hass: HomeAssistant, mock_config_entry, mock_
         lock_entity.hass = hass
         lock_entity.entity_id = "lock.rosdomofon_12345_1"
 
-        await lock_entity.async_unlock()
+        with pytest.raises(HomeAssistantError):
+            await lock_entity.async_unlock()
 
         assert lock_entity.is_locked is True
         assert lock_entity._unlock_timer is None
@@ -170,7 +172,8 @@ async def test_lock_token_refresh_failure(hass: HomeAssistant, mock_config_entry
         lock_entity.entity_id = "lock.rosdomofon_12345_1"
         mock_token_manager.ensure_valid_token = AsyncMock(return_value=False)
 
-        await lock_entity.async_unlock()
+        with pytest.raises(HomeAssistantError):
+            await lock_entity.async_unlock()
 
         assert lock_entity.is_locked is True
 
